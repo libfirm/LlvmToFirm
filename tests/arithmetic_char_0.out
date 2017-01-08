@@ -1,0 +1,12 @@
+a =
+b =
+
+    a     + b     = -52
+2 * a     - b     = -97
+3 * a     + a / b = 108
+4 * a * a - b     = 113
+
+Signed:   a / b = 1
+Signed:   a % b = 38
+Unsigned: a / b = 1
+Unsigned: a % b = 38

@@ -1,0 +1,100 @@
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
+add_library(ltf STATIC
+    Builders/BlockBuilder.hpp
+    Builders/BlockBuilder.cpp
+    Builders/Builder.hpp
+    Builders/EntityBuilder.hpp
+    Builders/EntityBuilder.cpp
+    Builders/FrameBuilder.hpp
+    Builders/FrameBuilder.cpp
+    Builders/GraphBuilder.hpp
+    Builders/GraphBuilder.cpp
+    Builders/NodeBuilder.hpp
+    Builders/NodeBuilder.cpp
+    Builders/TypeBuilder.hpp
+    Builders/TypeBuilder.cpp
+    Builders/TypeMetakey.hpp
+    Builders/TypeMetakey.cpp
+    Components/CParserOptimizer.cpp
+    Components/CParserOptimizer.hpp
+    Components/DefaultBackend.cpp
+    Components/DefaultBackend.hpp
+    Components/LlvmAssemblerParser.cpp
+    Components/LlvmAssemblerParser.hpp
+    Components/LlvmBitcodeParser.cpp
+    Components/LlvmBitcodeParser.hpp
+    Exceptions/LlvmException.hpp
+    Exceptions/NotImplementedException.hpp
+    Exceptions/NotImplementedException.cpp
+    Exceptions/NotSupportedException.hpp
+    Exceptions/NotSupportedException.cpp
+    Exceptions/ParseException.hpp
+    Exceptions/ParseException.cpp
+    Exceptions/VerifyException.hpp
+    Exceptions/VerifyException.cpp
+    Facade/Backend.hpp
+    Facade/Converter.cpp
+    Facade/Converter.hpp
+    Facade/Optimizer.cpp
+    Facade/Optimizer.hpp
+    Facade/Parser.hpp
+    Lowering/LowerInstructionsPass.cpp
+    Lowering/LowerInstructionsPass.hpp
+    Lowering/LowerIntrinsicsPass.cpp
+    Lowering/LowerIntrinsicsPass.hpp
+    Optimizations/BasePasses.cpp
+    Optimizations/BasePasses.hpp
+    Optimizations/OptimizationPasses.hpp
+    Instructions/Arithmetic.cpp
+    Instructions/Bitwise.cpp
+    Instructions/Constants.cpp
+    Instructions/ControlFlow.cpp
+    Instructions/Conversions.cpp
+    Instructions/IfCascade.cpp
+    Instructions/Memory.cpp
+    Instructions/Miscellaneous.cpp
+    Instructions/Tuples.cpp
+    Instructions/VarArg.cpp
+    RAII/AllocaScope.cpp
+    RAII/AllocaScope.hpp
+    RAII/BlockScope.cpp
+    RAII/BlockScope.hpp
+    RAII/TimedScope.hpp
+    RAII/FileHandle.cpp
+    RAII/FileHandle.hpp
+    RAII/FirmHandle.cpp
+    RAII/FirmHandle.hpp
+    RAII/GraphScope.cpp
+    RAII/GraphScope.hpp
+    RAII/UnoptimizedScope.cpp
+    RAII/UnoptimizedScope.hpp
+    Util/Casting.cpp
+    Util/Casting.hpp
+    Util/FirmTools.cpp
+    Util/FirmTools.hpp
+    Util/LlvmTools.cpp
+    Util/LlvmTools.hpp
+    Util/Logging.cpp
+    Util/Logging.hpp
+    Util/MapTools.hpp
+    Util/StringTools.hpp
+    Util/TypeInfo.hpp
+    Util/TypeInfo.cpp
+    Config.hpp
+    Context.cpp
+    Context.hpp
+    Library.hpp
+)
+
+# Setup external dependencies.
+include_directories(
+	${ltf_SOURCE_DIR}
+	${Boost_INCLUDE_DIRS}
+	${LLVM_INCLUDE_DIRS}
+	${Firm_INCLUDE_DIRS}
+)
+
+# Setup installation process.
+install(FILES Interface/Frontend.h DESTINATION include/ltf)
+install(TARGETS ltf ARCHIVE DESTINATION lib)

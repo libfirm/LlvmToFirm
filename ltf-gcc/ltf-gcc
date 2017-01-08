@@ -1,0 +1,601 @@
+#!/bin/bash
+# vim:ts=2:sw=2
+
+# Different compiler/linker tools.
+LLVM_GCC=llvm-gcc
+LLVM_GFT=llvm-gfortran
+LLVM_GPP=llvm-g++
+LLVM_LLC=llc
+LLVM_AS=llvm-as
+CLANG=clang
+LTF_LLC=ltf-llc
+
+ARCH=i686
+
+# Default fe_fe_fe_toolchain.
+BCC=$LLVM_GCC # Bitcode compiler
+ASM=$LLVM_GCC # Assembler
+LNK=$LLVM_GCC # Linker
+LLC=$LTF_LLC  # Compiler
+
+# Command line arguments for the separate tools.
+declare -a bccArgs # Bitcode compiler / Preprocessor
+declare -a llcArgs # LLVM via Firm Compiler
+declare -a asmArgs # Assembler
+declare -a lnkArgs # Linker
+declare -a modes
+declare -a fe_toolchains
+
+# Prepare a temporary directory for processing.
+tempDir=`mktemp -d`
+workDir=`pwd`
+mkdir -p $tempDir/bcc
+mkdir -p $tempDir/llc
+mkdir -p $tempDir/asm
+
+# Pretty cool cleanup trick.
+trap "rm -r $tempDir; cd $workDir" EXIT
+
+# ==============================================================================
+# =                              Main entry point                              =
+# ==============================================================================
+
+# Parse arguments, decide what to do and call the above functions.
+function main()
+{
+	parseCommandLine "$@"
+
+	# Determine the frontend toolchain to use.
+	if [ ${#fe_toolchains[@]} -gt 1 ] ; then
+		echo Only specify one frontend >& 2; exit 1
+	fi
+	fe_toolchain="${fe_toolchains[0]}" # May be ""
+
+	# Determine the backend toolchain to use.
+	if [ ${#be_toolchains[@]} -gt 1 ] ; then
+		echo Only specify one backend >& 2; exit 1
+	fi
+	be_toolchain="${be_toolchains[0]}" # May be ""
+
+	# Set the toolchains up.
+	case "$fe_toolchain" in
+		clang)
+			BCC=$CLANG ;;
+
+		llvm-g++)
+			BCC=$LLVM_GPP
+			LNK=$LLVM_GPP ;;
+
+		llvm-gfortran)
+			BCC=$LLVM_GFT
+			LNK=$LLVM_GFT ;;
+	esac
+
+	case "$be_toolchain" in
+		llvm-llc)
+			LLC=$LLVM_LLC ;;
+	esac
+
+	# Determine the compilation mode to use.
+	if [ ${#modes[@]} -gt 1 ] ; then
+		echo Only specify one compile mode >& 2; exit 1
+	fi
+	mode="${modes[0]}" # May be ""
+
+	# Call the actual compile methods.
+	case "$mode" in
+		-E) preprocess ;;
+		-S) compileSources ; compileBitcode ;;
+		-c) compileSources ; compileBitcode ; assemble ;;
+
+		# These modes stop halfway during processing.
+		--emit-firm*) compileSources ; compileBitcode ;;
+		--emit-llvm*) compileSources ;;
+
+		*) compileSources ; compileBitcode ; assemble ; link ;;
+	esac
+
+	case "$?" in
+		1) echo Missing input files >& 2
+		   exit 1 ;;
+	esac
+}
+
+# ==============================================================================
+# =                             Parse command line                             =
+# ==============================================================================
+
+# Command line parsing basically distributes the command arguments to
+# the specific commands used during compilation.
+function parseCommandLine
+{
+	output= ; runMode= ; copyDumps=
+
+	while [ -n "$1" ] ; do
+		case "$1" in
+			# General options.
+			-h | -help | --help) showHelp;    exit 1 ;;
+			--version)           showVersion; exit 1 ;;
+			--dry-run)           runMode=dry ;;
+			--verbose-run)       runMode=verbose ;;
+			-S | -c | -E)        listAdd modes "$1" ;;
+
+			--preprocess) listAdd modes "-E" ;;
+			--compile)    listAdd modes "-S" ;;
+			--assemble)   listAdd modes "-c" ;;
+
+			--clang)         listAdd fe_toolchains "clang" ;;
+			--llvm-gcc)      listAdd fe_toolchains "llvm-gcc" ;;
+			--llvm-g++)      listAdd fe_toolchains "llvm-g++" ;;
+			--llvm-gfortran) listAdd fe_toolchains "llvm-gfortran" ;;
+			--ltf-llc)       listAdd be_toolchains "ltf-llc" ;;
+			--llvm-llc)      listAdd be_toolchains "llvm-llc" ;;
+
+			# Additional modes.
+			--emit-firm | --emit-firm-low | --emit-llvm | --emit-llvm-bc)
+				listAdd modes "$1" ;;
+
+			-I)
+				listAdd bccArgs "$1" "$2"
+				shift ;;
+
+			# Bitcode compiler options.
+			-std=* | -I* | -f* | -D*)
+				listAdd bccArgs "$1" ;;
+
+			-O*)
+				if [ ${#1} -eq 4 ] ; then
+					fe_opt=-O${1:2:1}
+					be_opt=-O${1:3:1}
+				else
+					fe_opt=$1
+					be_opt=$1
+				fi
+				;;
+
+			--be-opt=*) be_opt=-O${1:9} ;;
+			--fe-opt=*) fe_opt=-O${1:9} ;;
+			--be-opt)   be_opt=-O$2 ; shift ;;
+			--fe-opt)   fe_opt=-O$2 ; shift ;;
+
+			# LTF compiler options.
+			--log-level=*)
+				listAdd llcArgs "$1" ;;
+
+			--dump*)
+				copyDumps=1
+				listAdd llcArgs "$1" ;;
+
+			--log-level)
+				listAdd llcArgs "$1" "$2"
+				shift ;;
+
+			-march=*)
+				ARCH=${1#-march=} ;;
+
+			--march=*)
+				ARCH=${1#--march=} ;;
+
+			--be-arg=*)
+				listAdd llcArgs "$1" ;;
+
+			--fstrict-math)
+				listAdd llcArgs "--strict-math" ;;
+
+			--ffast-math)
+				listAdd llcArgs "--fast-math" ;;
+
+			--fno-call-conv-opt)
+				listAdd llcArgs "--no-call-conv-opt" ;;
+
+			# Linker options.
+			-l* | -L*)
+				listAdd lnkArgs "$1" ;;
+
+			-l | -L)
+				listAdd lnkArgs "$1" "$2"
+				shift ;;
+
+			-o)
+				output="-o `readlink -f "$2"`"
+				shift ;;
+
+			# Schedule files for the different tools. Each tool will have input
+			# files with an invalid extension replaced by the previously converted
+			# temporary file prior to running it. This preserves the argument order.
+			*.c | *.cc | *.cpp | *.f | *.f77 | *.f90)
+				fullName=`readlink -f "$1"`
+				listAdd bccArgs $fullName
+				listAdd llcArgs $fullName
+				listAdd asmArgs $fullName
+				listAdd lnkArgs $fullName
+				;;
+
+			*.ll | *.bc | *.ir)
+				fullName=`readlink -f "$1"`
+				listAdd llcArgs $fullName
+				listAdd asmArgs $fullName
+				listAdd lnkArgs $fullName
+				;;
+
+			*.[sS])
+				fullName=`readlink -f "$1"`
+				listAdd asmArgs $fullName
+				listAdd lnkArgs $fullName
+				;;
+
+			*.o | *.a)
+				fullName=`readlink -f "$1"`
+				listAdd lnkArgs $fullName
+				;;
+
+			# Error fallback.
+			-*)
+				echo "WARNING: Unrecognized option $1 passed to the bitcode compiler" >& 2
+				listAdd bccArgs "$1"
+				;;
+
+			*) echo "ERROR: Unrecognized file type $1" >& 2; exit 1 ;;
+		esac
+
+		# Proceed to the next argument.
+		shift
+	done
+}
+
+# Takes a filename and creates a file with an equal name but different extension
+# in the given directory.
+function makeFilename # (name, new extension, new path) -> $result
+{
+	baseName=`basename $1`
+	result=$3/${baseName%.*}.$2
+}
+
+# Add the given items to the list.
+function listAdd # (variable, item, ...)
+{
+	cmd="$1=("\${$1[@]}" "\$@")"
+	shift
+	eval "$cmd"
+}
+
+# ==============================================================================
+# =                              Execute commands                              =
+# ==============================================================================
+
+# Run a command and show it, or only show it, depending on runMode.
+function execute
+{
+	case "$runMode" in
+		dry)     echo "$@" ; return 0 ;;
+		verbose) echo "$@" ; "$@" ; return $? ;;
+		*)       "$@" ; return $? ;;
+	esac
+
+	return 1
+}
+
+# Used for cd, so that paths are correct on a dry run.
+function executeAlways
+{
+	case "$runMode" in
+		dry | verbose) echo "$@" ; "$@" ; return $? ;;
+		*)             "$@" ; return $? ;;
+	esac
+
+	return 1
+}
+
+# Moves all files matching the filter to the target directory with the
+# extension replaced by the given one, except if no new extension is given.
+function moveAs # (filter, target directory, new extension)
+{
+	case "$runMode" in
+		dry | verbose)
+			echo -n Moving $1 to $2
+			if [ "$3" != "" ] ; then echo " (renamed to *.$3)" ; else echo ; fi
+		;;
+	esac
+	[ "$runMode" == "dry" ] && return
+
+	if [ "$3" = "" ] ; then
+		cmd="
+		shopt -s nullglob
+		for file in \$1; do
+			mv "\${file}" $2
+		done
+		"
+	else
+		cmd="
+		shopt -s nullglob
+		for file in \$1; do
+			mv "\${file}" $2/"\${file%.*}.$3"
+		done
+		"
+	fi
+
+	eval "${cmd}"
+}
+
+# Processes the given argument list and searches for files matching the
+# given input pattern. The return value signals the presence of such
+# input files. Arguments for files matching the rewrite pattern are replaced
+# by files with the rewrite extension in the given directory (if rewrite
+# pattern, directory and extension are specified). Rewritten files also
+# count as input files.
+function processArgs # (args, input pattern, rewrite pattern,
+                     #  rewrite directory, rewrite extension)
+{
+	cmd="
+	missingInput=1
+	for (( i = 0; i < \${#$1[@]}; i++ )) ; do
+		case "\${$1[i]}" in
+			$2)
+				# Input is available
+				missingInput=0 ;;"
+
+	if [ "$3" != "" ] ; then
+	cmd="$cmd
+			$3)
+				# Retarget to the temp directory.
+				missingInput=0
+				makeFilename "\${$1[i]}" "$5" "$4"
+				$1[i]=\$result ;;"
+	fi
+
+	cmd="$cmd
+		esac
+	done"
+
+	eval "$cmd"
+	return $missingInput
+}
+
+# Simply preprocesses source files in the working directory.
+function preprocess
+{
+	# Check for C or fortran files.
+	processArgs bccArgs "*.c | *.cc | *.cpp | *.f | *.f77 | *.f90" || return 1
+
+	executeAlways cd "$workDir" || exit 1
+	execute "$BCC" -m32 -march=$ARCH -E "${bccArgs[@]}" "$output" || exit 1
+	return 0
+}
+
+# Compiles source files to LLVM bitcode. The bitcode files are created
+# in the temporary directory and their filenames are already stored in
+# the llvmFiles variable (along with LLVM files directly specified).
+function compileSources
+{
+	# Check for C or fortran files.
+	processArgs bccArgs "*.c | *.cc | *.cpp | *.f | *.f77 | *.f90" || return 1
+	executeAlways cd "$tempDir/bcc" || exit 1
+
+	# Mode-dependent arguments.
+	modeArgs=
+	case "$mode" in
+		--emit-llvm) modeArgs="-S" ;;
+		*)           modeArgs="-c" ;;
+	esac
+
+	execute "$BCC" -m32 -march=$ARCH -emit-llvm $fe_opt -I$workDir $modeArgs "${bccArgs[@]}" || exit 1
+
+	# Copy out the resulting files.
+	case "$mode" in
+		--emit-llvm)    moveAs \*.s "$workDir" ll ;;
+		--emit-llvm-bc) moveAs \*.o "$workDir" bc ;;
+	esac
+
+	# Copy mod files out.
+	if [ "(" "$fe_toolchain" = "llvm-gfortran" ")" -a "(" "$mode" != "" ")" ] ; then
+		moveAs \*.mod "$workDir"
+	fi
+
+	return 0
+}
+
+# Compiles bitcode and LLVM assembler files from llvmFiles to assembler,
+# using ltf-llc. Output files are placed in the working directory, or
+# temporary directory, depending on the mode.
+function compileBitcode
+{
+	# Check for LLVM/firm files. C/fortran files will be LLVM by now (with extension o).
+	processArgs llcArgs "*.ll | *.bc | *.ir" "*.c | *.cc | *.cpp | *.f | *.f77 | *.f90" "$tempDir/bcc" "o" || return 1
+	executeAlways cd "$tempDir/llc" || exit 1
+
+	# LLC processes only one file at once, so separate files and the actual
+	# command line, to handle them separately.
+	declare -a llcFiles
+	declare -a llcRealArgs
+
+	for (( i = 0; i < ${#llcArgs[@]}; i++ )) ; do
+		case "${llcArgs[i]}" in
+			*.ll | *.bc | *.o | *.ir) listAdd llcFiles "${llcArgs[i]}" ;;
+			*)                        listAdd llcRealArgs "${llcArgs[i]}" ;;
+		esac
+	done
+
+	for llcFile in "${llcFiles[@]}" ; do
+
+		baseName=`basename "$llcFile"`
+
+		# File-type dependant arguments.
+		fileArgs=
+		case "$llcFile" in
+			*.ll)
+				if [ "$be_toolchain" == "llvm-ltf" ] ; then
+					fileArgs=--asm
+				else
+					# No support for direct assembler input. Use llvm-as first.
+					execute "$LLVM_AS" "$llcFile" -o "${baseName%.*}.bc" || exit 1
+					llcFile="${baseName%.*}.bc"
+				fi
+				;;
+
+			*.ir)
+				fileArgs=--firm
+				if [ "$be_toolchain" == "llvm-llc" ] ; then
+					echo Can\'t process firm IR with llvm-llc &> 2
+				fi
+				;;
+		esac
+
+		# Mode-dependend arguments.
+		modeArgs=
+		case "$mode" in
+			--emit-firm*) modeArgs="$mode" ;;
+		esac
+
+		if [ \( "$be_toolchain" == "llvm-llc" \) -a \( "$modeArgs" != "" \) ] ; then
+			echo Cannot lower LLVM code or emit firm code with llvm-llc >& 2
+			exit 1
+		fi
+
+		archArgs=
+		if [ "$be_toolchain" == "llvm-llc" ] ; then
+			# Little hack, so that 32 bit code is generated.
+			# Proper arch support would be better.
+			archArgs="-march=x86 -mcpu=$ARCH"
+		else
+			archArgs="--arch=$ARCH"
+		fi
+
+		execute "$LLC" $be_opt ${archArgs} ${fileArgs} ${modeArgs} "${llcRealArgs[@]}" "$llcFile" -o "${baseName%.*}.s"
+		result=$?
+
+		# Copy the dumps to the working directory.
+		[ "$copyDumps" = "1" ] && moveAs \*.vcg "$workDir"
+		[ $result -eq 0 ] || exit 1
+
+		# Copy out the resulting files.
+		case "$mode" in
+			--emit-firm*) moveAs \*.s "$workDir" ir ;;
+			-S)           moveAs \*.s "$workDir" ;;
+		esac
+	done
+
+	return 0
+}
+
+# Assemble all files mentioned in the asmArgs in the working directory.
+function assemble
+{
+	# Check for ASM files. C/fortran or LLVM/firm files will be ASM by now.
+	processArgs asmArgs "*.s" "*.c | *.cc | *.cpp | *.f | *.f77 | *.f90 | *.ll | *.bc | *.ir" "$tempDir/llc" "s" || return 1
+	executeAlways cd "$tempDir/asm" || exit 1
+
+	execute "$ASM" -m32 -march=$ARCH -c "${asmArgs[@]}" || exit 1
+
+	# Copy out the resulting files.
+	case "$mode" in
+		-c) moveAs \*.o "$workDir" ;;
+	esac
+
+	return 0
+}
+
+# Link all files mentioned in the linkArgs in the working directory.
+function link
+{
+	# Check for OBJ files. C/fortran, LLVM/firm or ASM files will be OBJ by now.
+	processArgs lnkArgs "*.o" "*.c | *.cc | *.cpp | *.f | *.f77 | *.f90 | *.ll | *.bc | *.ir | *.s" "$tempDir/asm" "o" || return 1
+	executeAlways cd "$workDir" || exit 1
+
+	if [ "$isFortran" = "1" ] ; then
+		# Needed to find those .mod files.
+		listAdd lnkArgs "-L ../bcc"
+	fi
+
+	execute "$LNK" -m32 -march=$ARCH "${lnkArgs[@]}" $output || exit 1
+
+	return 0
+}
+
+# ==============================================================================
+# =                                 Show help                                  =
+# ==============================================================================
+
+function showUsage
+{
+	echo Usage: ltf-gcc [options] file...
+}
+
+function showVersion
+{
+	echo ltf-gcc compiler tool
+	echo
+
+	$LTF_LLC  --version
+}
+
+function showHelp
+{
+	showUsage
+	cat << EOF
+
+Options:
+
+General options:
+  -h [ --help ]         show help message
+  --version             show version information
+  --dry-run             just show commands to run
+  --verbose-run         show command before running them
+
+Frontend selection:
+  --clang               clang as compiler and llvm-gcc as linker
+  --llvm-gcc            llvm-gcc as compiler and linker (default)
+  --llvm-g++            llvm-g++ as compiler and linker
+  --llvm-gfortran       llvm-gfortran as compiler and linker
+
+Backend selection:
+  --ltf-llc             ltf-llc as compiler backend (default)
+  --llvm-llc            llvm-llc as compiler backend
+
+Compile mode selection:
+  -E [ --preprocess ]   preprocess
+  --emit-llvm           compile to LLVM assembler
+  --emit-llvm-bc        compile to LLVM bitcode
+  --emit-firm           compile to firm IR program
+  --emit-firm-low       compile to lowered firm IR program
+  -S [--compile ]       compile to assembler
+  -c [--assemble ]      compile and assemble
+
+Compiler options:
+  --log-level arg (=1)  log level (0 to 3)
+  --dump-all            dump all graphs
+  --dump-types          dump the type graph
+  --dump-irg            dump all function graphs
+  --dump-irg-low        dump all lowered function graphs
+  --arch arg (=i686)    target architecture
+  --be-arg arg          pass an option to the firm backend
+
+  --fe-opt arg          set frontend optimization level
+  --be-opt arg          set backend optimization level
+  -O**                  set both optimization levels at once
+                        -O[frontend][backend]
+  --fstrict-math        use the strict math model
+  --ffast-math          use the fast math model
+  --fno-call-conv-opt   disable call conv optimization
+
+Compatibility options:
+  -O*                   set common optimization level
+  -march=* (=i686)      target architecture
+  -l* | -l *            link with the given library
+  -L* | -L *            add library directory
+  -I* | -I *            add include directory
+  -std=*                set C language standard
+  -D*                   define preprocessor macros
+  -f*                   passed to the bitcode compiler
+
+Additional file types:
+  *.ll                  LLVM assembler file
+  *.bc                  LLVM bitcode file
+  *.ir                  firm IR program
+  *.f, *.f77, *.f90     fortran source files
+
+EOF
+}
+
+main "$@"
+
+exit 0

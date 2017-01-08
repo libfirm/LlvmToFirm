@@ -1,0 +1,166 @@
+ARCHITECTORAL OVERVIEW
+======================
+
+ (1) User
+     |
+     |
+     |
+     | Library
+ ~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     |  
+     |                //=====================================================\\
+     |                || CONTEXT(3)                                          ||
+     |                ++=====================================================++
+     |                ||                                                     ||
+     |  /----------------> (4) EntityBuilder -----------> TypeBuilder (6)    ||
+     |  |             ||          ^     ^                         ^          ||
+     |  |             ||          |     |                         |          ||
+     |  |             ||          |     \-------------------\     |          ||
+     |  |             ||          |                         |     |          ||
+     v  |             ||          |                         v     |          ||
+ (2) Facade -------------> (5) GraphBuilder ------------> NodeBuilder (7)    ||
+                      ||          |     |                   |     |          ||
+                      ||          |     \-------------------)--\  |          ||
+                      ||          |                         |  |  |          ||
+                      ||          |     /-------------------/  |  |          ||
+                      ||          |     |                      |  |          ||
+                      ||          v     v                      v  v          ||
+                      ||   (9) BlockBuilder               FrameBuilder (8)   ||
+                      ||                                                     ||
+                      \\=====================================================//
+
+(1) User:
+~~~~~~~~~
+ => Starts conversion using the Frontend (=> 2)
+      o From a LLVM module
+      o From an assembler file
+      o From a bitcode file
+ => Lowers firm code
+      o Sel, SymConst
+      o 64 bit modes
+ => Runs the firm backend
+
+(2) Frontend:
+~~~~~~~~~~~~~
+ => Provides a user-visible facade for the library 
+ => (Parse assembler/bitcode file)
+ => Verify the input module
+ => Lower some high-level constructs
+      o Replace memcpy intrinsic
+      o Lower malloc/free 
+      o Using LoweringVisitor
+ => Constructs the context                          (=> 3)
+      o This constructs the global builder objects
+ => Build entities up-front using the EntityBuilder (=> 4)
+ => Build function graphs using the GraphBuilder    (=> 5)
+
+(3) Context:
+~~~~~~~~~~~~
+ => Stores global data during conversion
+ => Provides access to global builder objects
+      o TypeBuilder, GraphBuilder, EntityBuilder
+ => Is available to each builder object
+
+(4) EntityBuilder: (up-front)
+~~~~~~~~~~~~~~~~~~
+ => Builds ir_entities from llvm::GlobalValue
+ => Applies linkage types/linker names
+ => Retrieves types from the TypeBuilder          (=> 6)
+ => Creates initializer nodes using a NodeBuilder (=> 7)
+ 
+(5) GraphBuilder: (up-front)
+~~~~~~~~~~~~~~~~~
+ => Creates firm graphs for each llvm::Function
+ => Constructs the local builder objects
+ => Builds the frame type using the FrameBuilder  (=> 8)
+      o From allocas in the entry block
+ => Builds the graphs blocks using a BlockBuilder (=> 9)
+ => Builds the graphs nodes using a NodeBuilder   (=> 7)
+      o Inserts placeholders on PHI nodes
+      o Processes instructions in one pass
+ => Finalizes PHI nodes
+      o Dependencies are guaranteed to be available
+      o Also finishes after one pass
+
+(6) TypeBuilder: (on-demand)
+~~~~~~~~~~~~~~~~
+=> Builds ir_type from llvm::Type
+=> Provides mode conversion/lookup facilities
+=> Uses addional key metadata for function types
+
+(7) NodeBuilder: (on-demand, instructions up-front)
+~~~~~~~~~~~~~~~~
+=> Builds ir_node from llvm::Value
+=> Associated with one graph per instance
+     o A function graph with Block- and FrameBuilder
+     o The const graph (with restricted functionality)
+         - Used by the EntityBuilder
+         - Can handle constant expressions
+         
+=> Split up in multiple source files
+     o Arithmetic.cpp:    addition, subtraction, ...
+     o Bitwise.cpp:       left shift, xor, ...
+     o Constants.cpp:     integers, global pointers, ...
+     o ControlFlow.cpp:   branch, call, switch, ...
+     o Conversions.cpp:   fptoui, bitcast, ...
+     o Memory.cpp:        load, store, alloca, ...
+     o Miscellaneous.cpp: argument, select, ...
+     
+=> Uses the EntityBuilder to lookup entity addresses         (=> 4)
+=> Uses the TypeBuilder to convert types and to lookup modes (=> 6)
+=> Uses the FrameBuilder to redirect alloca accesses         (=> 8)
+=> Uses the BlockBuilder to lookup blocks and register jumps (=> 9)
+
+(8) FrameBuilder: (up-front)
+~~~~~~~~~~~~~~~~~
+=> Builds a frame type from passed-in alloca instructions
+=> Provides entity lookup for the NodeBuilder
+
+(9) BlockBuilder: (up-front)
+~~~~~~~~~~~~~~~~~
+=> Builds ir_node blocks from llvm::BasicBlock
+=> Uses reference counting, to provide early block maturing
+     o Initial reference count: 1 + "number of jumps to the block"
+     o +1: Added a partially constructed PHI node
+     o -1: Finished PHI construction
+     o -1: Processed all instructions
+     o -1: Registered a jump to the block
+     o The block is matured, when 0 is reached
+=> Ensures that unreachable blocks are kept-alive.
+     o Keeps track of each blocks last-known memory nodes.
+     o Detects unreachable blocks and root blocks to keep alive.
+
+BUILDER OVERVIEW
+================
+
+=> Always provides a hash map as query cache
+=> There are two kinds of builders
+     o OnDemandBuilder
+         - Automatically builds missing objects on lookup
+         - Uses the cache to avoid re-building
+         - retrieve()
+     o UpFrontBuilder
+         - Objects should be built up-front
+         - The cache is used as lookup-table
+         - Looking up missing objects returns null
+         - Preferred when requested objects are known up-front
+         - build() / lookup()
+         
+=> The virtual doBuild() method actually builds objects
+     o The result is automatically being cached
+     
+=> Metadata can be attached to keys, for complex queries
+     o For example additional parameter attributes
+     o Metadata is attached as shared pointer
+         - Objects have to provide getHashValue() and operator==()
+         - Metadata can be polymorphic
+
+LOGGING OVERVIEW
+================
+
+=> Four log streams are provided in the log namespace:
+     o log::debug, log::info, log::warning and log::error
+     o Messages are finished by writing log::end to the stream
+=> Messages are passed to a Logger on log::end
+=> The abstract Logger class can be used, for customized logging 
+     o set-/getLogger() can be used to change the current logger

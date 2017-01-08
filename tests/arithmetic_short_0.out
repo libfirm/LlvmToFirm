@@ -1,0 +1,12 @@
+a =
+b =
+
+    a     + b     = -6601
+2 * a     - b     = -18521
+3 * a     + a / b = -25126
+4 * a * a - b     = -349
+
+Signed:   a / b = -4
+Signed:   a % b = -1282
+Unsigned: a / b = 32
+Unsigned: a % b = 426

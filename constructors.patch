@@ -1,0 +1,35 @@
+Index: libltf/Facade/Converter.cpp
+===================================================================
+--- libltf/Facade/Converter.cpp	(Revision 158)
++++ libltf/Facade/Converter.cpp	(Arbeitskopie)
+@@ -212,6 +212,8 @@
+         
+         context.getGraphBuilder()->disableConstruction();
+         set_irp_phase_state(phase_high);
++
++        tr_vrfy();
+         
+         program = get_irp();
+         currentStage = ProgramStage::Converted;
+Index: libltf/Builders/EntityBuilder.cpp
+===================================================================
+--- libltf/Builders/EntityBuilder.cpp	(Revision 158)
++++ libltf/Builders/EntityBuilder.cpp	(Arbeitskopie)
+@@ -284,9 +284,6 @@
+             // Get the function entity and set the hidden user flag, to prevent
+             // firm from removing the function.
+             ir_entity* entity = context.retrieveEntity(functionPtr);
+-            set_entity_linkage(entity, static_cast<ir_linkage>(
+-                get_entity_linkage(entity) | IR_LINKAGE_HIDDEN_USER
+-            ));
+             
+             // Find an name that isn't used by another entity.
+             std::ostringstream nameStr, firmNameStr;
+@@ -325,6 +322,7 @@
+             set_entity_visibility(ptrEntity, ir_visibility_local);
+             set_atomic_ent_value(ptrEntity, ptrNode);
+             set_entity_ld_ident(ptrEntity, new_id_from_str(""));
++            add_entity_linkage(ptrEntity, IR_LINKAGE_HIDDEN_USER);
+         }
+         
+         return 0;

@@ -1,0 +1,75 @@
+Coding Guidelines
+=================
+
+1. Include files
+----------------
+
+- Usual order:
+  1. For source files: the appropriate header
+  2. An empty line, if more than two lines follow
+  3. Standard library headers
+  4. LLVM/firm
+  5. Local includes
+  
+- Local includes use relative paths, so that they remain valid outside of the project
+  without include paths.
+  
+- For header files: avoid including headers, when forward declarations suffice.
+  For firm: include the appropriate header (for example libfirm/firm_types.h). Forward
+  declaration is problematic because of several typedefs.
+
+- Forward declaration in std yields undefined behavior. So use iosfwd etc. when possible
+  and include the std headers if not. Boost headers are generally included.
+
+2. Namespaces
+-------------
+
+- using is never used in header files.
+
+- using can be used in source files, but is usually only used for boost, to facilate
+  shared_ptr usage. llvm is usually written out, in order to keep the namespaces short,
+  std is relatively short anyhow.
+  
+- using directives are written directly after includes in a source file.
+  
+- nested namespaces in ltf may be used for related functionality, but is usually written
+  out on usage.
+  
+3. typedefs
+-----------
+
+- map and list types are usually accompanied by a typedef. For example a list containing
+  Widgets is called WidgetList (singular form). A map that maps between Widgets is called
+  WidgetMap. A map that maps integers to types may be called IntegerToTypeMap.
+  This is done, to make code clearer, especially when STL iterators get involved.
+  
+4. Templates
+------------
+
+- Template parameters are usually given a meaningful name, followed by "T". For ex. KeyT.
+
+5. Assertions / Exceptions
+--------------------------
+
+- Simple parameter validation does not require an explanatory text.
+- Only use an assertion for things that aren't expected to happen (for example because
+  operand types should already be validated etc.).
+- If there is something that might happen, but is intentionally not handled, throw a
+  NotSupportedException. If it should have been handled, throw a NotImplementedException.
+
+6. Inlining
+-----------
+
+- Methods can be implicitly inlined, by placing them in the header file, but only if they
+  don't require additional header files to be included. This may be changed during later
+  optimization though.
+  
+7. Firm identifiers
+-------------------
+
+- Types inherit LLVMs type names, using "_" instead of spaces. If a count of numbering of
+  some sort is required, it is usually appended using a number sign "#".
+  Additional metadata may be appended after the type, most frequently using a combination
+  of identifier character and data. For example ~2 denotes that the second parameter is
+  being passed by value.
+- Textual annotations may be appended in square brackets.

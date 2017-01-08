@@ -1,0 +1,13 @@
+a =
+b =
+
+a ^ b             = 6
+a | b             = 86
+a & b             = 80
+a << 2            = 80
+a << 5            = -128
+Signed: a >> 2    = 21
+Signed: a >> 5    = 2
+Unsigned: a >> 2  = 21
+Unsigned: a >> 5  = 2
+(a & b) ^ (a | b) = 6
